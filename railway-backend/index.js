@@ -1,4 +1,5 @@
 // Complete AI-Powered Painting Recognition Backend for Railway
+// Updated to use 'painting' table (singular)
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
@@ -89,7 +90,7 @@ app.get('/api/paintings', async (req, res) => {
       SELECT id, title, artist, year, description, museum, wiki_link, 
              view_count, created_at,
              CASE WHEN features IS NOT NULL THEN true ELSE false END as has_ai_features
-      FROM paintings 
+      FROM painting 
       ORDER BY id
     `);
     
@@ -125,7 +126,7 @@ app.get('/api/paintings', async (req, res) => {
 // HEALTH CHECK
 app.get('/api/health', async (req, res) => {
   try {
-    const result = await pool.query('SELECT COUNT(*) as total, COUNT(features) as with_features FROM paintings');
+    const result = await pool.query('SELECT COUNT(*) as total, COUNT(features) as with_features FROM painting');
     const stats = result.rows[0];
     
     res.json({
@@ -176,7 +177,7 @@ app.post('/api/recognize', upload.single('image'), async (req, res) => {
     // Get all paintings with their stored features from database
     const result = await pool.query(`
       SELECT id, title, artist, year, description, museum, wiki_link, features 
-      FROM paintings 
+      FROM painting 
       WHERE features IS NOT NULL
     `);
     
@@ -207,7 +208,7 @@ app.post('/api/recognize', upload.single('image'), async (req, res) => {
       );
       
       // Update view count
-      await pool.query('UPDATE paintings SET view_count = view_count + 1 WHERE id = $1', [bestMatch.id]);
+      await pool.query('UPDATE painting SET view_count = view_count + 1 WHERE id = $1', [bestMatch.id]);
       
       res.json({
         success: true,
@@ -267,7 +268,7 @@ app.post('/api/admin/add-features', upload.single('image'), async (req, res) => 
     
     // Update painting with features
     const result = await pool.query(`
-      UPDATE paintings 
+      UPDATE painting 
       SET features = $1, processing_status = 'completed' 
       WHERE id = $2 
       RETURNING title, artist
@@ -300,7 +301,7 @@ app.post('/api/admin/add-features', upload.single('image'), async (req, res) => 
 app.post('/api/admin/update-schema', async (req, res) => {
   try {
     await pool.query(`
-      ALTER TABLE paintings 
+      ALTER TABLE painting 
       ADD COLUMN IF NOT EXISTS features TEXT,
       ADD COLUMN IF NOT EXISTS processing_status VARCHAR(50) DEFAULT 'pending'
     `);
