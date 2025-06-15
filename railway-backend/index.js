@@ -1,4 +1,4 @@
-// Real AI-Powered Painting Recognition Backend
+// Complete AI-Powered Painting Recognition Backend for Railway
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
@@ -82,7 +82,86 @@ function calculateSimilarity(features1, features2) {
   return dotProduct / (Math.sqrt(norm1) * Math.sqrt(norm2));
 }
 
-// Real image recognition endpoint
+// GET ALL PAINTINGS
+app.get('/api/paintings', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT id, title, artist, year, description, museum, wiki_link, 
+             view_count, created_at,
+             CASE WHEN features IS NOT NULL THEN true ELSE false END as has_ai_features
+      FROM paintings 
+      ORDER BY id
+    `);
+    
+    const paintings = result.rows.map(painting => ({
+      id: painting.id,
+      title: painting.title,
+      artist: painting.artist,
+      year: painting.year,
+      description: painting.description,
+      museum: painting.museum,
+      wikiLink: painting.wiki_link,
+      viewCount: painting.view_count || 0,
+      hasAiFeatures: painting.has_ai_features,
+      createdAt: painting.created_at
+    }));
+    
+    res.json({
+      success: true,
+      paintings: paintings,
+      count: paintings.length
+    });
+    
+  } catch (error) {
+    console.error('Get paintings error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to fetch paintings',
+      error: error.message 
+    });
+  }
+});
+
+// HEALTH CHECK
+app.get('/api/health', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT COUNT(*) as total, COUNT(features) as with_features FROM paintings');
+    const stats = result.rows[0];
+    
+    res.json({
+      status: 'healthy',
+      timestamp: new Date().toISOString(),
+      paintings: parseInt(stats.total),
+      paintingsWithAI: parseInt(stats.with_features),
+      aiModel: model ? 'loaded' : 'loading',
+      features: 'Real AI recognition active',
+      database: 'connected'
+    });
+  } catch (error) {
+    res.status(500).json({ 
+      status: 'error', 
+      message: error.message,
+      aiModel: model ? 'loaded' : 'loading'
+    });
+  }
+});
+
+// ROOT ROUTE
+app.get('/', (req, res) => {
+  res.json({ 
+    message: "🎨 ArtSpotter AI Backend",
+    status: "running",
+    aiModel: model ? 'loaded' : 'loading',
+    endpoints: {
+      health: "/api/health",
+      paintings: "/api/paintings", 
+      recognize: "/api/recognize (POST)"
+    },
+    version: "2.0"
+  });
+});
+
+// REAL IMAGE RECOGNITION
 app.post('/api/recognize', upload.single('image'), async (req, res) => {
   try {
     if (!req.file) {
@@ -168,92 +247,73 @@ app.post('/api/recognize', upload.single('image'), async (req, res) => {
   }
 });
 
-// Add painting with image processing
-app.post('/api/admin/paintings', upload.single('image'), async (req, res) => {
+// ADD FEATURES TO EXISTING PAINTING
+app.post('/api/admin/add-features', upload.single('image'), async (req, res) => {
   try {
-    const { title, artist, year, description, museum, wikiLink } = req.body;
+    const { paintingId } = req.body;
     
     if (!req.file) {
       return res.status(400).json({ success: false, message: 'Image required' });
     }
     
+    if (!paintingId) {
+      return res.status(400).json({ success: false, message: 'Painting ID required' });
+    }
+    
+    console.log(`Processing features for painting ID: ${paintingId}`);
+    
     // Extract features from the reference image
     const features = await extractFeatures(req.file.buffer);
     
-    // Store painting with features
+    // Update painting with features
     const result = await pool.query(`
-      INSERT INTO paintings (title, artist, year, description, museum, wiki_link, features) 
-      VALUES ($1, $2, $3, $4, $5, $6, $7) 
-      RETURNING id
-    `, [title, artist, year, description, museum, wikiLink, JSON.stringify(features)]);
+      UPDATE paintings 
+      SET features = $1, processing_status = 'completed' 
+      WHERE id = $2 
+      RETURNING title, artist
+    `, [JSON.stringify(features), paintingId]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Painting not found' });
+    }
+    
+    const painting = result.rows[0];
     
     res.json({
       success: true,
-      message: 'Painting added successfully with AI features',
-      paintingId: result.rows[0].id
+      message: `AI features extracted for "${painting.title}" by ${painting.artist}`,
+      paintingId: paintingId,
+      featureCount: features.length
     });
     
   } catch (error) {
-    console.error('Add painting error:', error);
-    res.status(500).json({ success: false, message: 'Failed to add painting' });
-  }
-});
-
-// Batch process existing paintings to add features
-app.post('/api/admin/process-features', async (req, res) => {
-  try {
-    // This would process images from URLs or uploaded files
-    // to generate features for existing paintings
-    
-    const paintings = await pool.query('SELECT id, title FROM paintings WHERE features IS NULL');
-    
-    res.json({
-      success: true,
-      message: `Found ${paintings.rows.length} paintings that need feature processing`,
-      paintingsToProcess: paintings.rows
+    console.error('Add features error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to process features',
+      error: error.message 
     });
-    
-  } catch (error) {
-    res.status(500).json({ success: false, message: 'Processing failed' });
   }
 });
 
-// Update database schema for features
+// UPDATE DATABASE SCHEMA
 app.post('/api/admin/update-schema', async (req, res) => {
   try {
     await pool.query(`
       ALTER TABLE paintings 
       ADD COLUMN IF NOT EXISTS features TEXT,
-      ADD COLUMN IF NOT EXISTS image_url VARCHAR(500),
       ADD COLUMN IF NOT EXISTS processing_status VARCHAR(50) DEFAULT 'pending'
     `);
     
     res.json({ success: true, message: 'Database schema updated for AI features' });
   } catch (error) {
-    res.status(500).json({ success: false, message: 'Schema update failed' });
+    console.error('Schema update error:', error);
+    res.status(500).json({ success: false, message: 'Schema update failed', error: error.message });
   }
 });
 
 // Initialize the model when server starts
 loadModel();
-
-// Health check
-app.get('/api/health', async (req, res) => {
-  try {
-    const result = await pool.query('SELECT COUNT(*) FROM paintings');
-    const paintingCount = parseInt(result.rows[0].count);
-    
-    res.json({
-      status: 'healthy',
-      timestamp: new Date().toISOString(),
-      paintings: paintingCount,
-      aiModel: model ? 'loaded' : 'loading',
-      features: 'Real AI recognition active'
-    });
-  } catch (error) {
-    res.status(500).json({ status: 'error', message: error.message });
-  }
-});
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
