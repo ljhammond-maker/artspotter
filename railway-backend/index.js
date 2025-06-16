@@ -6,6 +6,7 @@ const multer = require('multer');
 const sharp = require('sharp');
 const tf = require('@tensorflow/tfjs-node');
 const { Pool } = require('pg');
+const axios = require('axios');
 
 const app = express();
 app.use(cors());
@@ -83,6 +84,46 @@ function calculateSimilarity(features1, features2) {
   return dotProduct / (Math.sqrt(norm1) * Math.sqrt(norm2));
 }
 
+// ROOT ROUTE
+app.get('/', (req, res) => {
+  res.json({ 
+    message: "🎨 ArtSpotter AI Backend",
+    status: "running",
+    aiModel: model ? 'loaded' : 'loading',
+    endpoints: {
+      health: "/api/health",
+      paintings: "/api/paintings", 
+      recognize: "/api/recognize (POST)",
+      admin: "/api/admin/* (POST)"
+    },
+    version: "2.0"
+  });
+});
+
+// HEALTH CHECK
+app.get('/api/health', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT COUNT(*) as total, COUNT(features) as with_features FROM painting');
+    const stats = result.rows[0];
+    
+    res.json({
+      status: 'healthy',
+      timestamp: new Date().toISOString(),
+      paintings: parseInt(stats.total),
+      paintingsWithAI: parseInt(stats.with_features),
+      aiModel: model ? 'loaded' : 'loading',
+      features: 'Real AI recognition active',
+      database: 'connected'
+    });
+  } catch (error) {
+    res.status(500).json({ 
+      status: 'error', 
+      message: error.message,
+      aiModel: model ? 'loaded' : 'loading'
+    });
+  }
+});
+
 // GET ALL PAINTINGS
 app.get('/api/paintings', async (req, res) => {
   try {
@@ -121,45 +162,6 @@ app.get('/api/paintings', async (req, res) => {
       error: error.message 
     });
   }
-});
-
-// HEALTH CHECK
-app.get('/api/health', async (req, res) => {
-  try {
-    const result = await pool.query('SELECT COUNT(*) as total, COUNT(features) as with_features FROM painting');
-    const stats = result.rows[0];
-    
-    res.json({
-      status: 'healthy',
-      timestamp: new Date().toISOString(),
-      paintings: parseInt(stats.total),
-      paintingsWithAI: parseInt(stats.with_features),
-      aiModel: model ? 'loaded' : 'loading',
-      features: 'Real AI recognition active',
-      database: 'connected'
-    });
-  } catch (error) {
-    res.status(500).json({ 
-      status: 'error', 
-      message: error.message,
-      aiModel: model ? 'loaded' : 'loading'
-    });
-  }
-});
-
-// ROOT ROUTE
-app.get('/', (req, res) => {
-  res.json({ 
-    message: "🎨 ArtSpotter AI Backend",
-    status: "running",
-    aiModel: model ? 'loaded' : 'loading',
-    endpoints: {
-      health: "/api/health",
-      paintings: "/api/paintings", 
-      recognize: "/api/recognize (POST)"
-    },
-    version: "2.0"
-  });
 });
 
 // REAL IMAGE RECOGNITION
@@ -201,12 +203,6 @@ app.post('/api/recognize', upload.single('image'), async (req, res) => {
     const confidenceThreshold = 0.6;
     
     if (bestMatch && highestSimilarity > confidenceThreshold) {
-      // Log successful recognition
-      await pool.query(
-        'INSERT INTO recognition_logs (painting_id, confidence_score, success) VALUES ($1, $2, $3)',
-        [bestMatch.id, highestSimilarity, true]
-      );
-      
       // Update view count
       await pool.query('UPDATE painting SET view_count = view_count + 1 WHERE id = $1', [bestMatch.id]);
       
@@ -225,12 +221,6 @@ app.post('/api/recognize', upload.single('image'), async (req, res) => {
         message: 'Painting recognized successfully!'
       });
     } else {
-      // Log failed recognition
-      await pool.query(
-        'INSERT INTO recognition_logs (painting_id, confidence_score, success) VALUES ($1, $2, $3)',
-        [null, highestSimilarity, false]
-      );
-      
       res.json({
         success: false,
         message: 'Painting not recognized. Try adjusting angle or lighting.',
@@ -313,18 +303,7 @@ app.post('/api/admin/update-schema', async (req, res) => {
   }
 });
 
-// Initialize the model when server starts
-loadModel();
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`🎨 ArtSpotter AI server running on port ${PORT}`);
-  console.log('Real image recognition active!');
-});
-
-const axios = require('axios');
-
-// AI Description Generation Endpoint
+// AI DESCRIPTION GENERATION ENDPOINT
 app.post('/api/admin/generate-description', async (req, res) => {
     try {
         const { title, artist, year, museum } = req.body;
@@ -355,7 +334,7 @@ app.post('/api/admin/generate-description', async (req, res) => {
     }
 });
 
-// Description Improvement Endpoint  
+// DESCRIPTION IMPROVEMENT ENDPOINT  
 app.post('/api/admin/improve-description', async (req, res) => {
     try {
         const { currentDescription, title, artist } = req.body;
@@ -386,7 +365,7 @@ app.post('/api/admin/improve-description', async (req, res) => {
     }
 });
 
-// Add Painting Endpoint (with all fields)
+// ADD NEW PAINTING ENDPOINT
 app.post('/api/admin/add-painting', async (req, res) => {
     try {
         const { title, artist, year, description, museum, wikiLink } = req.body;
@@ -397,8 +376,6 @@ app.post('/api/admin/add-painting', async (req, res) => {
                 message: 'Title and artist are required'
             });
         }
-
-        const db = new Pool({ connectionString: process.env.DATABASE_URL });
         
         const insertQuery = `
             INSERT INTO painting (
@@ -408,7 +385,7 @@ app.post('/api/admin/add-painting', async (req, res) => {
             RETURNING *
         `;
         
-        const result = await db.query(insertQuery, [
+        const result = await pool.query(insertQuery, [
             title,
             artist,
             year || null,
@@ -418,7 +395,6 @@ app.post('/api/admin/add-painting', async (req, res) => {
         ]);
         
         const painting = result.rows[0];
-        await db.end();
         
         console.log(`✅ Added painting: "${title}" by ${artist} (ID: ${painting.id})`);
         
@@ -438,23 +414,38 @@ app.post('/api/admin/add-painting', async (req, res) => {
     }
 });
 
-// AI Description Generation Functions
+// AI DESCRIPTION GENERATION FUNCTIONS
 async function generateArtworkDescription(title, artist, year, museum) {
     // Use template-based description (no API key needed)
     return generateTemplateDescription(title, artist, year, museum);
 }
 
 function generateTemplateDescription(title, artist, year, museum) {
-    const templates = [
-        `"${title}" by ${artist}${year ? ` (${year})` : ''} is a masterful work housed in ${museum}. This painting showcases ${artist}'s distinctive artistic style and represents an important piece in the museum's collection. The work continues to captivate visitors with its artistic excellence and historical significance.`,
+    // Smart templates based on famous artists
+    const artistTemplates = {
+        'turner': `"${title}" by J.M.W. Turner${year ? ` (${year})` : ''} exemplifies the artist's mastery of light and atmospheric effects. This ${museum} masterpiece demonstrates Turner's innovative approach to landscape painting, with its luminous palette and dynamic brushwork capturing the sublime power of nature.`,
         
-        `This ${year ? `${year} ` : ''}painting by ${artist} demonstrates the artist's technical skill and creative vision. "${title}" is part of ${museum}'s renowned collection and offers visitors insight into ${artist}'s artistic development. The work exemplifies the artistic movements and cultural context of its time.`,
+        'constable': `"${title}" by John Constable${year ? ` (${year})` : ''} represents the pinnacle of English landscape painting. Housed in ${museum}, this work showcases Constable's revolutionary plein air technique and his deep emotional connection to the English countryside, influencing generations of artists.`,
         
-        `"${title}" represents ${artist}'s contribution to art history and is proudly displayed at ${museum}. ${year ? `Created in ${year}, this ` : 'This '}painting reflects the artistic traditions and innovations of its era. Visitors can appreciate both the technical mastery and aesthetic beauty that define this remarkable work.`
-    ];
-    
-    const templateIndex = title.length % templates.length;
-    return templates[templateIndex];
+        'van gogh': `"${title}" by Vincent van Gogh${year ? ` (${year})` : ''} displays the artist's distinctive post-impressionist style with bold colors and expressive brushstrokes. This ${museum} treasure captures van Gogh's unique vision and emotional intensity that would influence modern art profoundly.`,
+        
+        'monet': `"${title}" by Claude Monet${year ? ` (${year})` : ''} demonstrates the essence of Impressionism through its exploration of light and color. This masterpiece at ${museum} showcases Monet's innovative technique of capturing fleeting moments and atmospheric conditions.`,
+        
+        'leonardo': `"${title}" by Leonardo da Vinci${year ? ` (${year})` : ''} represents the genius of the High Renaissance. This extraordinary work in ${museum} displays Leonardo's mastery of sfumato technique and his profound understanding of human anatomy and expression.`,
+        
+        'vermeer': `"${title}" by Johannes Vermeer${year ? ` (${year})` : ''} showcases the Dutch master's unparalleled ability to capture light and intimate domestic scenes. This precious work at ${museum} demonstrates Vermeer's meticulous technique and his genius for transforming everyday moments into timeless art.`,
+        
+        'picasso': `"${title}" by Pablo Picasso${year ? ` (${year})` : ''} exemplifies the revolutionary spirit of modern art. This groundbreaking work in ${museum} reflects Picasso's innovative approach to form and perspective, fundamentally changing how we perceive artistic representation.`,
+        
+        'default': `"${title}" by ${artist}${year ? ` (${year})` : ''} is a significant work housed in ${museum}. This painting demonstrates ${artist}'s distinctive artistic style and represents an important contribution to the museum's collection, continuing to inspire and educate visitors about the evolution of art.`
+    };
+
+    // Find matching template based on artist name
+    const artistKey = Object.keys(artistTemplates).find(key => 
+        artist.toLowerCase().includes(key)
+    ) || 'default';
+
+    return artistTemplates[artistKey];
 }
 
 async function improveArtworkDescription(currentDescription, title, artist) {
@@ -463,7 +454,18 @@ async function improveArtworkDescription(currentDescription, title, artist) {
     improved = improved.replace(/painting/g, 'masterpiece');
     improved = improved.replace(/shows/g, 'depicts');
     improved = improved.replace(/made/g, 'created');
+    improved = improved.replace(/work/g, 'artistic achievement');
     improved = improved.charAt(0).toUpperCase() + improved.slice(1);
     return improved;
 }
+
+// Initialize the model when server starts
+loadModel();
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`🎨 ArtSpotter AI server running on port ${PORT}`);
+  console.log('Real image recognition active!');
+});
+
 module.exports = app;
