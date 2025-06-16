@@ -529,4 +529,180 @@ app.listen(PORT, () => {
   console.log('Claude API:', process.env.ANTHROPIC_API_KEY ? 'configured' : 'not configured');
 });
 
+module.exports = app;,
+            description: improvedDescription
+        });
+
+    } catch (error) {
+        console.error('Description improvement error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to improve description',
+            error: error.message
+        });
+    }
+});
+
+// ADD NEW PAINTING ENDPOINT
+app.post('/api/admin/add-painting', async (req, res) => {
+    try {
+        const { title, artist, year, description, museum, wikiLink } = req.body;
+        
+        if (!title || !artist) {
+            return res.status(400).json({
+                success: false,
+                message: 'Title and artist are required'
+            });
+        }
+        
+        const insertQuery = `
+            INSERT INTO painting (
+                title, artist, year, description, museum, wiki_link,
+                view_count, processing_status, created_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, 0, 'pending', NOW())
+            RETURNING *
+        `;
+        
+        const result = await pool.query(insertQuery, [
+            title,
+            artist,
+            year || null,
+            description || null,
+            museum || 'National Gallery, London',
+            wikiLink || null
+        ]);
+        
+        const painting = result.rows[0];
+        
+        console.log(`✅ Added painting: "${title}" by ${artist} (ID: ${painting.id})`);
+        
+        res.json({
+            success: true,
+            painting: painting,
+            message: 'Painting added successfully'
+        });
+
+    } catch (error) {
+        console.error('Add painting error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to add painting',
+            error: error.message
+        });
+    }
+});
+
+// AI DESCRIPTION GENERATION FUNCTIONS
+async function generateArtworkDescription(title, artist, year, museum) {
+    // Try Claude API first, fallback to templates
+    if (process.env.ANTHROPIC_API_KEY) {
+        try {
+            return await generateWithClaude(title, artist, year, museum);
+        } catch (error) {
+            console.error('Claude API error, falling back to templates:', error);
+            return generateTemplateDescription(title, artist, year, museum);
+        }
+    } else {
+        console.log('No Claude API key, using templates');
+        return generateTemplateDescription(title, artist, year, museum);
+    }
+}
+
+async function generateWithClaude(title, artist, year, museum) {
+    try {
+        const response = await axios.post('https://api.anthropic.com/v1/messages', {
+            model: 'claude-3-haiku-20240307',
+            max_tokens: 200,
+            messages: [{
+                role: 'user',
+                content: `Write a concise, engaging 2-3 sentence description for the painting "${title}" by ${artist}${year ? ` (${year})` : ''} housed in ${museum}. Focus on the artistic style, subject matter, and historical significance. Make it informative but accessible to museum visitors.`
+            }]
+        }, {
+            headers: {
+                'Content-Type': 'application/json',
+                'x-api-key': process.env.ANTHROPIC_API_KEY,
+                'anthropic-version': '2023-06-01'
+            }
+        });
+
+        return response.data.content[0].text.trim();
+
+    } catch (error) {
+        console.error('Claude API error:', error.response?.data || error.message);
+        throw new Error('Claude API request failed');
+    }
+}
+
+function generateTemplateDescription(title, artist, year, museum) {
+    // Smart templates based on famous artists (fallback)
+    const artistTemplates = {
+        'turner': `"${title}" by J.M.W. Turner${year ? ` (${year})` : ''} exemplifies the artist's mastery of light and atmospheric effects. This ${museum} masterpiece demonstrates Turner's innovative approach to landscape painting, with its luminous palette and dynamic brushwork capturing the sublime power of nature.`,
+        
+        'constable': `"${title}" by John Constable${year ? ` (${year})` : ''} represents the pinnacle of English landscape painting. Housed in ${museum}, this work showcases Constable's revolutionary plein air technique and his deep emotional connection to the English countryside, influencing generations of artists.`,
+        
+        'van gogh': `"${title}" by Vincent van Gogh${year ? ` (${year})` : ''} displays the artist's distinctive post-impressionist style with bold colors and expressive brushstrokes. This ${museum} treasure captures van Gogh's unique vision and emotional intensity that would influence modern art profoundly.`,
+        
+        'default': `"${title}" by ${artist}${year ? ` (${year})` : ''} is a significant work housed in ${museum}. This painting demonstrates ${artist}'s distinctive artistic style and represents an important contribution to the museum's collection, continuing to inspire and educate visitors about the evolution of art.`
+    };
+
+    // Find matching template based on artist name
+    const artistKey = Object.keys(artistTemplates).find(key => 
+        artist.toLowerCase().includes(key)
+    ) || 'default';
+
+    return artistTemplates[artistKey];
+}
+
+async function improveArtworkDescription(currentDescription, title, artist) {
+    // Try Claude API first for improvements
+    if (process.env.ANTHROPIC_API_KEY) {
+        try {
+            const response = await axios.post('https://api.anthropic.com/v1/messages', {
+                model: 'claude-3-haiku-20240307',
+                max_tokens: 200,
+                messages: [{
+                    role: 'user',
+                    content: `Please improve this art description for "${title}" by ${artist}:\n\n"${currentDescription}"\n\nMake it more engaging, accurate, and informative while keeping it concise (2-3 sentences). Focus on artistic technique, historical context, or visual elements.`
+                }]
+            }, {
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-api-key': process.env.ANTHROPIC_API_KEY,
+                    'anthropic-version': '2023-06-01'
+                }
+            });
+
+            return response.data.content[0].text.trim();
+
+        } catch (error) {
+            console.error('Claude improvement error:', error);
+            // Fall back to simple improvements
+            return enhanceDescriptionText(currentDescription);
+        }
+    } else {
+        return enhanceDescriptionText(currentDescription);
+    }
+}
+
+function enhanceDescriptionText(description) {
+    // Simple text improvements (fallback)
+    let improved = description;
+    improved = improved.replace(/painting/g, 'masterpiece');
+    improved = improved.replace(/shows/g, 'depicts');
+    improved = improved.replace(/made/g, 'created');
+    improved = improved.replace(/work/g, 'artistic achievement');
+    improved = improved.charAt(0).toUpperCase() + improved.slice(1);
+    return improved;
+}
+
+// Initialize the model when server starts
+loadModel();
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`🎨 ArtSpotter AI server running on port ${PORT}`);
+  console.log('Real image recognition active!');
+  console.log('Claude API:', process.env.ANTHROPIC_API_KEY ? 'configured' : 'not configured');
+});
+
 module.exports = app;
