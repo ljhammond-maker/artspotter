@@ -322,4 +322,148 @@ app.listen(PORT, () => {
   console.log('Real image recognition active!');
 });
 
+const axios = require('axios');
+
+// AI Description Generation Endpoint
+app.post('/api/admin/generate-description', async (req, res) => {
+    try {
+        const { title, artist, year, museum } = req.body;
+        
+        if (!title || !artist) {
+            return res.status(400).json({
+                success: false,
+                message: 'Title and artist are required'
+            });
+        }
+
+        console.log(`🤖 Generating description for: "${title}" by ${artist}`);
+
+        const description = await generateArtworkDescription(title, artist, year, museum);
+        
+        res.json({
+            success: true,
+            description: description
+        });
+
+    } catch (error) {
+        console.error('Description generation error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to generate description',
+            error: error.message
+        });
+    }
+});
+
+// Description Improvement Endpoint  
+app.post('/api/admin/improve-description', async (req, res) => {
+    try {
+        const { currentDescription, title, artist } = req.body;
+        
+        if (!currentDescription) {
+            return res.status(400).json({
+                success: false,
+                message: 'Current description is required'
+            });
+        }
+
+        console.log(`✨ Improving description for: "${title}" by ${artist}`);
+
+        const improvedDescription = await improveArtworkDescription(currentDescription, title, artist);
+        
+        res.json({
+            success: true,
+            description: improvedDescription
+        });
+
+    } catch (error) {
+        console.error('Description improvement error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to improve description',
+            error: error.message
+        });
+    }
+});
+
+// Add Painting Endpoint (with all fields)
+app.post('/api/admin/add-painting', async (req, res) => {
+    try {
+        const { title, artist, year, description, museum, wikiLink } = req.body;
+        
+        if (!title || !artist) {
+            return res.status(400).json({
+                success: false,
+                message: 'Title and artist are required'
+            });
+        }
+
+        const db = new Pool({ connectionString: process.env.DATABASE_URL });
+        
+        const insertQuery = `
+            INSERT INTO painting (
+                title, artist, year, description, museum, wiki_link,
+                view_count, processing_status, created_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, 0, 'pending', NOW())
+            RETURNING *
+        `;
+        
+        const result = await db.query(insertQuery, [
+            title,
+            artist,
+            year || null,
+            description || null,
+            museum || 'National Gallery, London',
+            wikiLink || null
+        ]);
+        
+        const painting = result.rows[0];
+        await db.end();
+        
+        console.log(`✅ Added painting: "${title}" by ${artist} (ID: ${painting.id})`);
+        
+        res.json({
+            success: true,
+            painting: painting,
+            message: 'Painting added successfully'
+        });
+
+    } catch (error) {
+        console.error('Add painting error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to add painting',
+            error: error.message
+        });
+    }
+});
+
+// AI Description Generation Functions
+async function generateArtworkDescription(title, artist, year, museum) {
+    // Use template-based description (no API key needed)
+    return generateTemplateDescription(title, artist, year, museum);
+}
+
+function generateTemplateDescription(title, artist, year, museum) {
+    const templates = [
+        `"${title}" by ${artist}${year ? ` (${year})` : ''} is a masterful work housed in ${museum}. This painting showcases ${artist}'s distinctive artistic style and represents an important piece in the museum's collection. The work continues to captivate visitors with its artistic excellence and historical significance.`,
+        
+        `This ${year ? `${year} ` : ''}painting by ${artist} demonstrates the artist's technical skill and creative vision. "${title}" is part of ${museum}'s renowned collection and offers visitors insight into ${artist}'s artistic development. The work exemplifies the artistic movements and cultural context of its time.`,
+        
+        `"${title}" represents ${artist}'s contribution to art history and is proudly displayed at ${museum}. ${year ? `Created in ${year}, this ` : 'This '}painting reflects the artistic traditions and innovations of its era. Visitors can appreciate both the technical mastery and aesthetic beauty that define this remarkable work.`
+    ];
+    
+    const templateIndex = title.length % templates.length;
+    return templates[templateIndex];
+}
+
+async function improveArtworkDescription(currentDescription, title, artist) {
+    // Simple text improvements
+    let improved = currentDescription;
+    improved = improved.replace(/painting/g, 'masterpiece');
+    improved = improved.replace(/shows/g, 'depicts');
+    improved = improved.replace(/made/g, 'created');
+    improved = improved.charAt(0).toUpperCase() + improved.slice(1);
+    return improved;
+}
 module.exports = app;
